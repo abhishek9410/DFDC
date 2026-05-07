@@ -1,0 +1,11 @@
+Dataset/.kaggle/
+Dataset/deepfake-detection-challenge/
+Dataset/processed/
+*.previous.h5
+__pycache__/
+.venv/
+.qodo/
+RestorePoints/
+*.log
+Deploy/static/uploads/
+static/uploads/

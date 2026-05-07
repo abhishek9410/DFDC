@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DeepFake Video Detection</title>
+  <style>
+    :root {
+      color-scheme: light;
+      font-family: Inter, Arial, Helvetica, sans-serif;
+      color: #18181b;
+      background: #f4f6f8;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: #f4f6f8;
+    }
+
+    .topbar {
+      background: #111827;
+      color: #fff;
+      padding: 22px 24px;
+    }
+
+    .topbar-inner {
+      margin: 0 auto;
+      max-width: 1040px;
+    }
+
+    h1 {
+      font-size: 28px;
+      line-height: 1.15;
+      margin: 0 0 6px;
+    }
+
+    .subtitle {
+      color: #d1d5db;
+      font-size: 14px;
+      line-height: 1.5;
+      margin: 0;
+      max-width: 760px;
+    }
+
+    main {
+      display: grid;
+      gap: 18px;
+      grid-template-columns: minmax(0, 380px) minmax(0, 1fr);
+      margin: 0 auto;
+      max-width: 1040px;
+      padding: 24px;
+    }
+
+    .panel {
+      background: #fff;
+      border: 1px solid #e4e4e7;
+      border-radius: 8px;
+      box-shadow: 0 10px 24px rgba(15, 23, 42, 0.06);
+      padding: 18px;
+    }
+
+    .panel h2 {
+      font-size: 18px;
+      line-height: 1.25;
+      margin: 0 0 12px;
+    }
+
+    .help {
+      color: #52525b;
+      font-size: 13px;
+      line-height: 1.5;
+      margin: 0 0 14px;
+    }
+
+    .messages {
+      list-style: none;
+      margin: 0 0 14px;
+      padding: 0;
+    }
+
+    .messages li {
+      background: #eef6ff;
+      border: 1px solid #bfdbfe;
+      border-radius: 6px;
+      color: #1e3a8a;
+      font-size: 13px;
+      line-height: 1.4;
+      margin-bottom: 8px;
+      padding: 9px 10px;
+    }
+
+    .file-picker {
+      align-items: center;
+      border: 1px dashed #a1a1aa;
+      border-radius: 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+      justify-content: center;
+      min-height: 132px;
+      padding: 16px;
+      text-align: center;
+    }
+
+    input[type="file"] {
+      max-width: 100%;
+    }
+
+    .selected-file {
+      color: #3f3f46;
+      font-size: 12px;
+      line-height: 1.4;
+      margin: 0;
+      min-height: 18px;
+      overflow-wrap: anywhere;
+    }
+
+    .actions {
+      display: grid;
+      gap: 10px;
+      margin-top: 14px;
+    }
+
+    button,
+    input[type="submit"] {
+      border: 0;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 700;
+      min-height: 42px;
+      padding: 10px 14px;
+      width: 100%;
+    }
+
+    .primary {
+      background: #1f6feb;
+      color: #fff;
+    }
+
+    .primary:hover {
+      background: #1a5fd0;
+    }
+
+    .secondary {
+      background: #111827;
+      color: #fff;
+    }
+
+    .secondary:hover {
+      background: #030712;
+    }
+
+    .preview-shell {
+      align-items: center;
+      background: #111827;
+      border-radius: 8px;
+      display: flex;
+      justify-content: center;
+      min-height: 330px;
+      overflow: hidden;
+    }
+
+    video {
+      background: #000;
+      display: block;
+      max-height: 460px;
+      width: 100%;
+    }
+
+    .empty-preview {
+      color: #d1d5db;
+      font-size: 14px;
+      padding: 32px;
+      text-align: center;
+    }
+
+    .result {
+      border-radius: 8px;
+      margin-top: 16px;
+      min-height: 86px;
+      padding: 14px;
+    }
+
+    .result.empty {
+      background: #f4f4f5;
+      border: 1px solid #e4e4e7;
+      color: #52525b;
+    }
+
+    .result.real {
+      background: #ecfdf3;
+      border: 1px solid #86efac;
+      color: #14532d;
+    }
+
+    .result.fake {
+      background: #fef3f2;
+      border: 1px solid #fda29b;
+      color: #7f1d1d;
+    }
+
+    .result.unsupported,
+    .result.error {
+      background: #fffbeb;
+      border: 1px solid #facc15;
+      color: #713f12;
+    }
+
+    .result-label {
+      font-size: 24px;
+      font-weight: 800;
+      line-height: 1.2;
+      margin: 0 0 6px;
+    }
+
+    .result-copy {
+      font-size: 13px;
+      line-height: 1.5;
+      margin: 0;
+    }
+
+    .spinner {
+      animation: spin 0.8s linear infinite;
+      border: 3px solid #dbeafe;
+      border-top-color: #1f6feb;
+      border-radius: 50%;
+      display: none;
+      height: 18px;
+      margin-right: 8px;
+      width: 18px;
+    }
+
+    .loading .spinner {
+      display: inline-block;
+      vertical-align: middle;
+    }
+
+    .meta-list {
+      color: #52525b;
+      font-size: 12px;
+      line-height: 1.5;
+      margin: 14px 0 0;
+      padding-left: 18px;
+    }
+
+    @keyframes spin {
+      to {
+        transform: rotate(360deg);
+      }
+    }
+
+    @media (max-width: 820px) {
+      main {
+        grid-template-columns: 1fr;
+        padding: 16px;
+      }
+
+      .topbar {
+        padding: 18px 16px;
+      }
+
+      .preview-shell {
+        min-height: 240px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <div class="topbar-inner">
+      <h1>DeepFake Video Detection</h1>
+      <p class="subtitle">Upload a short video, preview it, then run the local InceptionV3 + GRU model. Videos without a clear human face are flagged as not suitable for deepfake analysis.</p>
+    </div>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>1. Upload Video</h2>
+      <p class="help">Supported formats: MP4, MOV, AVI, MKV, and WebM. Short clips process faster on CPU.</p>
+
+      {% with messages = get_flashed_messages() %}
+        {% if messages %}
+          <ul class="messages">
+            {% for message in messages %}
+              <li>{{ message }}</li>
+            {% endfor %}
+          </ul>
+        {% endif %}
+      {% endwith %}
+
+      <form id="uploadForm" method="post" action="/" enctype="multipart/form-data">
+        <div class="file-picker">
+          <input id="fileInput" type="file" name="file" accept="video/mp4,video/quicktime,video/x-msvideo,video/x-matroska,video/webm" autocomplete="off" required>
+          <p id="selectedFile" class="selected-file">No video selected</p>
+        </div>
+        <div class="actions">
+          <input class="primary" type="submit" value="Upload and Preview">
+        </div>
+      </form>
+
+      {% if filename %}
+        <form id="analyzeForm" method="get" action="{{ url_for('sequence_prediction', filename=filename) }}">
+          <div class="actions">
+            <button id="analyzeButton" class="secondary" type="submit">
+              <span class="spinner" aria-hidden="true"></span>
+              <span id="analyzeText">Analyze Current Video</span>
+            </button>
+          </div>
+        </form>
+      {% endif %}
+
+      <ul class="meta-list">
+        <li>Use a clip with a visible human face for best results.</li>
+        <li>Cartoon, animation, gameplay, or scenery clips will be reported as not suitable.</li>
+        <li>The active model uses InceptionV3 frame features with a GRU classifier.</li>
+      </ul>
+    </section>
+
+    <section class="panel">
+      <h2>2. Preview and Result</h2>
+      <div class="preview-shell">
+        {% if filename %}
+          <video controls preload="metadata">
+            <source src="{{ url_for('display_video', filename=filename) }}">
+            Your browser does not support video playback.
+          </video>
+        {% else %}
+          <div class="empty-preview">Upload a video to see the preview here.</div>
+        {% endif %}
+      </div>
+
+      {% set result_text = prediction or '' %}
+      {% set result_lower = result_text|lower %}
+      {% if result_text %}
+        {% if 'fake' in result_lower %}
+          {% set result_class = 'fake' %}
+        {% elif 'real' in result_lower %}
+          {% set result_class = 'real' %}
+        {% elif 'error' in result_lower %}
+          {% set result_class = 'error' %}
+        {% else %}
+          {% set result_class = 'unsupported' %}
+        {% endif %}
+      {% else %}
+        {% set result_class = 'empty' %}
+      {% endif %}
+
+      <div id="resultBox" class="result {{ result_class }}">
+        {% if result_text %}
+          {% if result_class == 'fake' %}
+            <p class="result-label">FAKE</p>
+          {% elif result_class == 'real' %}
+            <p class="result-label">REAL</p>
+          {% elif result_class == 'error' %}
+            <p class="result-label">Analysis Error</p>
+          {% else %}
+            <p class="result-label">Not Suitable</p>
+          {% endif %}
+          <p class="result-copy">{{ result_text }}</p>
+        {% else %}
+          <p class="result-label">Waiting for analysis</p>
+          <p class="result-copy">After upload, click Analyze Current Video to get a result.</p>
+        {% endif %}
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const fileInput = document.getElementById('fileInput');
+    const selectedFile = document.getElementById('selectedFile');
+    const analyzeForm = document.getElementById('analyzeForm');
+    const analyzeButton = document.getElementById('analyzeButton');
+    const analyzeText = document.getElementById('analyzeText');
+    const resultBox = document.getElementById('resultBox');
+
+    fileInput?.addEventListener('change', () => {
+      selectedFile.textContent = fileInput.files?.[0]?.name || 'No video selected';
+    });
+
+    analyzeForm?.addEventListener('submit', () => {
+      analyzeButton.disabled = true;
+      analyzeButton.classList.add('loading');
+      analyzeText.textContent = 'Analyzing...';
+      resultBox.className = 'result empty';
+      resultBox.innerHTML = '<p class="result-label">Analyzing video</p><p class="result-copy">Extracting frames and checking for human faces. This can take a minute on CPU.</p>';
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>DeepFake Detector</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <main>
+    <header>
+      <h1>DeepFake Detector</h1>
+      <span id="serverState">Checking</span>
+    </header>
+
+    <section>
+      <button id="analyzePage" type="button">Analyze Page Video</button>
+      <p id="pageHint">Works with readable HTML video sources. Some protected streaming pages block video export.</p>
+    </section>
+
+    <section>
+      <label for="fileInput">Upload video</label>
+      <input id="fileInput" type="file" accept="video/mp4,video/quicktime,video/x-msvideo,video/x-matroska,video/webm">
+      <button id="analyzeFile" type="button">Analyze Uploaded Video</button>
+    </section>
+
+    <section id="result" aria-live="polite">
+      <div id="status">Start the Flask server, then choose an analysis option.</div>
+      <div id="label"></div>
+      <div id="confidence"></div>
+    </section>
+  </main>
+  <script src="popup.js"></script>
+</body>
+</html>

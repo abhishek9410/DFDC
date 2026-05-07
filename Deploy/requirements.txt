@@ -1,0 +1,7 @@
+flask==2.2.2
+werkzeug<3.0.0
+tensorflow
+opencv-python
+numpy
+imageio
+mtcnn
