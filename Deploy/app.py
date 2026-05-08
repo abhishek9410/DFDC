@@ -602,7 +602,9 @@ def predict_with_frame_model(video_path):
     frame_probabilities = frame_model.predict(frames, verbose=0)
     prob_real = float(np.mean(frame_probabilities[:, 0]))
     prob_fake = float(np.mean(frame_probabilities[:, 1]))
-    fake_threshold = 0.5
+
+    # Threshold is tunable for calibration.
+    fake_threshold = float(os.getenv('DEEPFAKE_FAKE_THRESHOLD_FRAME', '0.5'))
 
     if prob_fake >= fake_threshold:
         label = 'FAKE'
@@ -627,6 +629,7 @@ def predict_with_frame_model(video_path):
         },
         'threshold': fake_threshold,
         'content': content_metadata,
+        'temporal_analysis': None,
     }
 
 
