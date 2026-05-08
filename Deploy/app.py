@@ -640,7 +640,7 @@ def predict_video_path(video_path):
     if feature_extractor is None or classifier_model is None:
         raise RuntimeError("Models not loaded properly.")
 
-    frame_result = extract_frames(video_path, sequence_length=20, return_metadata=True)
+    frame_result = extract_frames(video_path, sequence_length=12, return_metadata=True)
     if frame_result is None:
         raise ValueError("Could not extract frames")
 
