@@ -275,7 +275,7 @@
   <header class="topbar">
     <div class="topbar-inner">
       <h1>DeepFake Video Detection</h1>
-      <p class="subtitle">Upload a short video, preview it, then run the local InceptionV3 + GRU model. Videos without a clear human face are flagged as not suitable for deepfake analysis.</p>
+      <p class="subtitle">Upload a short video, preview it, then run the local deepfake detector. Videos without a clear human face are flagged as not suitable for deepfake analysis.</p>
     </div>
   </header>
 
@@ -318,7 +318,7 @@
       <ul class="meta-list">
         <li>Use a clip with a visible human face for best results.</li>
         <li>Cartoon, animation, gameplay, or scenery clips will be reported as not suitable.</li>
-        <li>The active model uses InceptionV3 frame features with a GRU classifier.</li>
+        <li>The app automatically uses the upgraded EfficientNetV2 frame model after you train it.</li>
       </ul>
     </section>
 
@@ -338,9 +338,13 @@
       {% set result_text = prediction or '' %}
       {% set result_lower = result_text|lower %}
       {% if result_text %}
-        {% if 'fake' in result_lower %}
+        {% if prediction_status %}
+          {% set result_class = prediction_status %}
+        {% elif 'no human face' in result_lower or 'not suitable' in result_lower or 'animated' in result_lower %}
+          {% set result_class = 'unsupported' %}
+        {% elif result_lower.startswith('fake') %}
           {% set result_class = 'fake' %}
-        {% elif 'real' in result_lower %}
+        {% elif result_lower.startswith('real') %}
           {% set result_class = 'real' %}
         {% elif 'error' in result_lower %}
           {% set result_class = 'error' %}

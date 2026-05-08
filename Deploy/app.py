@@ -87,8 +87,25 @@ def download_video(url):
 # -------------------------------------------------------------------
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_PATH = os.path.join(BASE_DIR, 'models', 'inceptionNet_model.h5')
+FRAME_MODEL_PATH = os.path.join(BASE_DIR, 'models', 'efficientnetv2_frame_model.keras')
 MODEL_BACKBONE = 'InceptionV3'
 MODEL_INPUT_SIZE = (299, 299)
+FRAME_MODEL_INPUT_SIZE = (224, 224)
+FRAME_MODEL_SEQUENCE_LENGTH = 32
+ACTIVE_MODEL_NAME = 'InceptionV3 + GRU'
+MIN_FACE_FRAMES = 8
+MIN_FACE_FRAME_RATIO = 0.40
+
+frame_model = None
+if os.path.exists(FRAME_MODEL_PATH):
+    try:
+        print(f"Loading stronger frame model from {FRAME_MODEL_PATH}...")
+        frame_model = tf.keras.models.load_model(FRAME_MODEL_PATH, compile=False)
+        ACTIVE_MODEL_NAME = 'EfficientNetV2 frame ensemble'
+        print("Frame model loaded.")
+    except Exception as e:
+        print(f"Error loading frame model, falling back to InceptionV3 + GRU: {e}")
+        frame_model = None
 
 def build_classifier_model():
     """
@@ -114,14 +131,16 @@ def build_classifier_model():
         traceback.print_exc()
         raise e
 
-# 1. Load Feature Extractor (InceptionV3)
-try:
-    print("Loading InceptionV3 feature extractor...")
-    feature_extractor = InceptionV3(weights='imagenet', include_top=False, pooling='avg')
-    print("InceptionV3 loaded.")
-except Exception as e:
-    print(f"Error loading InceptionV3: {e}")
-    feature_extractor = None
+# 1. Load Feature Extractor (InceptionV3 fallback)
+feature_extractor = None
+if frame_model is None:
+    try:
+        print("Loading InceptionV3 feature extractor...")
+        feature_extractor = InceptionV3(weights='imagenet', include_top=False, pooling='avg')
+        print("InceptionV3 loaded.")
+    except Exception as e:
+        print(f"Error loading InceptionV3: {e}")
+        feature_extractor = None
 
 import h5py
 
@@ -210,21 +229,19 @@ def load_weights_manually(model, filepath):
 # 2. Build and Load Classifier
 import traceback
 classifier_model = None
-try:
-    print("Building classifier model...")
-    # Clean up debug prints in build_classifier_model first? 
-    # Calling it here assumes it's defined.
-    # We should update build_classifier_model separately to remove prints.
-    classifier_model = build_classifier_model()
-    print("Loading weights manually from h5...")
-    if load_weights_manually(classifier_model, MODEL_PATH):
-        print("Classifier weights loaded successfully.")
-    else:
-        print("Failed to load weights manually.")
-except Exception as e:
-    print(f"Error loading classifier weights: {e}")
-    traceback.print_exc()
-    classifier_model = None
+if frame_model is None:
+    try:
+        print("Building classifier model...")
+        classifier_model = build_classifier_model()
+        print("Loading weights manually from h5...")
+        if load_weights_manually(classifier_model, MODEL_PATH):
+            print("Classifier weights loaded successfully.")
+        else:
+            print("Failed to load weights manually.")
+    except Exception as e:
+        print(f"Error loading classifier weights: {e}")
+        traceback.print_exc()
+        classifier_model = None
 
 
 mtcnn_detector = None
@@ -477,7 +494,146 @@ def extract_frames(video_path, sequence_length=20, return_metadata=False):
         return None
 
 
+def extract_frame_model_frames(video_path, sequence_length=FRAME_MODEL_SEQUENCE_LENGTH, return_metadata=False):
+    """
+    Extract raw RGB face crops for the EfficientNetV2 frame model.
+    The trained model includes its own EfficientNetV2 preprocessing layer.
+    """
+    try:
+        cap = cv2.VideoCapture(video_path)
+        if not cap.isOpened():
+            print(f"Error: Could not open video {video_path}")
+            return None
+
+        num_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        if num_frames == 0:
+            print("Error: Video has 0 frames")
+            cap.release()
+            return None
+
+        indices = np.linspace(0, num_frames - 1, sequence_length, dtype=np.int32)
+        frames = []
+        frames_with_faces = 0
+        total_faces = 0
+        detector_counts = {'mtcnn': 0, 'haar': 0, 'none': 0}
+
+        for frame_index in indices:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, int(frame_index))
+            ret, frame = cap.read()
+            if not ret:
+                frames.append(np.zeros((FRAME_MODEL_INPUT_SIZE[1], FRAME_MODEL_INPUT_SIZE[0], 3), dtype='float32'))
+                continue
+
+            faces, detector_used = detect_faces(frame)
+            detector_counts[detector_used] = detector_counts.get(detector_used, 0) + 1
+
+            if len(faces) > 0:
+                frames_with_faces += 1
+                total_faces += len(faces)
+                face = max(faces, key=lambda item: item['box'][2] * item['box'][3])
+                x, y, w, h = face['box']
+                margin = int(0.18 * max(w, h))
+                x, y, w, h = clamp_face_box(x - margin, y - margin, w + (2 * margin), h + (2 * margin), frame.shape)
+                if w > 0 and h > 0:
+                    frame = frame[y:y+h, x:x+w]
+
+            frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            frame = cv2.resize(frame, FRAME_MODEL_INPUT_SIZE)
+            frames.append(frame.astype('float32'))
+
+        cap.release()
+
+        while len(frames) < sequence_length:
+            frames.append(np.zeros((FRAME_MODEL_INPUT_SIZE[1], FRAME_MODEL_INPUT_SIZE[0], 3), dtype='float32'))
+
+        frames = np.array(frames, dtype='float32')
+        if return_metadata:
+            metadata = {
+                'sampled_frames': sequence_length,
+                'frames_with_faces': frames_with_faces,
+                'total_faces': total_faces,
+                'face_frame_ratio': frames_with_faces / sequence_length,
+                'face_detector': 'mtcnn' if detector_counts.get('mtcnn', 0) else 'haar',
+                'detector_counts': detector_counts,
+            }
+            return frames, metadata
+        return frames
+    except Exception as e:
+        print(f"Error extracting frame-model frames: {e}")
+        traceback.print_exc()
+        return None
+
+
+def build_unsupported_content_result(content_metadata):
+    frames_with_faces = int(content_metadata.get('frames_with_faces', 0))
+    sampled_frames = int(content_metadata.get('sampled_frames', 0)) or 1
+    face_frame_ratio = float(content_metadata.get('face_frame_ratio', frames_with_faces / sampled_frames))
+
+    if frames_with_faces >= MIN_FACE_FRAMES and face_frame_ratio >= MIN_FACE_FRAME_RATIO:
+        return None
+
+    return {
+        'status': 'unsupported',
+        'label': 'NO HUMAN FACE DETECTED',
+        'probability': None,
+        'message': (
+            'No clear human face was detected in enough frames. '
+            'This can happen with animated, cartoon, gameplay, scenery, object-only, or very dark videos. '
+            'Please upload a video with a visible human face for REAL/FAKE analysis.'
+        ),
+        'content': content_metadata,
+        'requirements': {
+            'minimum_face_frames': MIN_FACE_FRAMES,
+            'minimum_face_frame_ratio': MIN_FACE_FRAME_RATIO,
+        },
+    }
+
+
+def predict_with_frame_model(video_path):
+    frame_result = extract_frame_model_frames(video_path, return_metadata=True)
+    if frame_result is None:
+        raise ValueError("Could not extract frames")
+
+    frames, content_metadata = frame_result
+    unsupported_result = build_unsupported_content_result(content_metadata)
+    if unsupported_result is not None:
+        return unsupported_result
+
+    frame_probabilities = frame_model.predict(frames, verbose=0)
+    prob_real = float(np.mean(frame_probabilities[:, 0]))
+    prob_fake = float(np.mean(frame_probabilities[:, 1]))
+    fake_threshold = 0.5
+
+    if prob_fake >= fake_threshold:
+        label = 'FAKE'
+        probability = prob_fake
+    else:
+        label = 'REAL'
+        probability = prob_real
+
+    return {
+        'status': 'ok',
+        'model': {
+            'name': ACTIVE_MODEL_NAME,
+            'classifier_weights': os.path.basename(FRAME_MODEL_PATH),
+            'sequence_length': FRAME_MODEL_SEQUENCE_LENGTH,
+            'aggregation': 'mean_frame_probability',
+        },
+        'label': label,
+        'probability': probability,
+        'probabilities': {
+            'real': prob_real,
+            'fake': prob_fake,
+        },
+        'threshold': fake_threshold,
+        'content': content_metadata,
+    }
+
+
 def predict_video_path(video_path):
+    if frame_model is not None:
+        return predict_with_frame_model(video_path)
+
     if feature_extractor is None or classifier_model is None:
         raise RuntimeError("Models not loaded properly.")
 
@@ -489,17 +645,9 @@ def predict_video_path(video_path):
     if frames is None:
         raise ValueError("Could not extract frames")
 
-    if content_metadata['frames_with_faces'] < 3:
-        return {
-            'status': 'unsupported',
-            'label': 'NO HUMAN FACE DETECTED',
-            'probability': None,
-            'message': (
-                'This video does not contain enough detectable human face frames for deepfake analysis. '
-                'It may be animation, cartoon content, scenery, gameplay, or a video without a clear human face.'
-            ),
-            'content': content_metadata,
-        }
+    unsupported_result = build_unsupported_content_result(content_metadata)
+    if unsupported_result is not None:
+        return unsupported_result
 
     features = feature_extractor.predict(frames)
     features_batch = np.expand_dims(features, axis=0)
@@ -570,14 +718,16 @@ def display_video(filename):
 
 @app.route('/api/health')
 def api_health():
+    models_loaded = frame_model is not None or (feature_extractor is not None and classifier_model is not None)
     return jsonify({
         'status': 'ok',
-        'models_loaded': feature_extractor is not None and classifier_model is not None,
+        'models_loaded': models_loaded,
         'model': {
-            'backbone': MODEL_BACKBONE,
-            'classifier_weights': os.path.basename(MODEL_PATH),
-            'sequence_length': 20,
-            'feature_size': 2048,
+            'active': ACTIVE_MODEL_NAME,
+            'backbone': 'EfficientNetV2B0' if frame_model is not None else MODEL_BACKBONE,
+            'classifier_weights': os.path.basename(FRAME_MODEL_PATH if frame_model is not None else MODEL_PATH),
+            'sequence_length': FRAME_MODEL_SEQUENCE_LENGTH if frame_model is not None else 20,
+            'feature_size': None if frame_model is not None else 2048,
         },
     })
 
@@ -627,17 +777,19 @@ def sequence_prediction(filename):
             return render_template(
                 'upload.html',
                 filename=filename,
-                prediction=result['message']
+                prediction=result['message'],
+                prediction_status='unsupported'
             )
         return render_template(
             'upload.html',
             filename=filename,
-            prediction=f"{result['label']} (Probability: {result['probability']:.2f})"
+            prediction=f"{result['label']} (Probability: {result['probability']:.2f})",
+            prediction_status=result['label'].lower()
         )
 
     except Exception as e:
         print(f"Error during prediction: {e}")
-        return render_template('upload.html', filename=filename, prediction=f"Error: {e}")
+        return render_template('upload.html', filename=filename, prediction=f"Error: {e}", prediction_status='error')
 
 if __name__ == "__main__":
     app.run(debug=True)

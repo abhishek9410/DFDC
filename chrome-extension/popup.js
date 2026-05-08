@@ -77,9 +77,9 @@ function filenameFromUrl(url, fallback = "page-video.mp4") {
   try {
     const parsed = new URL(url);
     const lastPart = parsed.pathname.split("/").filter(Boolean).pop();
-    return lastPart || fallback;
+    return sanitizeFilename(lastPart || fallback);
   } catch (_error) {
-    return fallback;
+    return sanitizeFilename(fallback);
   }
 }
 
@@ -89,6 +89,13 @@ function extensionFromMime(mimeType) {
   if (mimeType.includes("x-msvideo")) return "avi";
   if (mimeType.includes("matroska")) return "mkv";
   return "mp4";
+}
+
+function sanitizeFilename(filename) {
+  return (filename || "page-video.mp4")
+    .replace(/[^a-z0-9._-]+/gi, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 100) || "page-video.mp4";
 }
 
 function collectPageVideoInfo() {
@@ -101,19 +108,21 @@ function collectPageVideoInfo() {
     }
   };
 
-  const urls = [];
-  const addUrl = (value) => {
+  const candidates = [];
+  const addCandidate = (value, sourceType, index = -1) => {
     const url = absoluteUrl(value);
-    if (url && !urls.includes(url)) urls.push(url);
+    if (!url || candidates.some((candidate) => candidate.url === url)) return;
+    candidates.push({ url, sourceType, videoIndex: index });
   };
 
-  for (const video of document.querySelectorAll("video")) {
-    addUrl(video.currentSrc);
-    addUrl(video.src);
+  const videos = Array.from(document.querySelectorAll("video"));
+  videos.forEach((video, index) => {
+    addCandidate(video.currentSrc, "video-current", index);
+    addCandidate(video.src, "video-src", index);
     for (const source of video.querySelectorAll("source")) {
-      addUrl(source.src);
+      addCandidate(source.src, "video-source", index);
     }
-  }
+  });
 
   for (const selector of [
     "meta[property='og:video']",
@@ -121,27 +130,28 @@ function collectPageVideoInfo() {
     "meta[property='og:video:secure_url']",
     "meta[name='twitter:player:stream']"
   ]) {
-    addUrl(document.querySelector(selector)?.content);
+    addCandidate(document.querySelector(selector)?.content, "metadata");
   }
 
   for (const link of document.querySelectorAll("a[href]")) {
     const href = link.getAttribute("href");
     if (/\.(mp4|mov|avi|mkv|webm)(\?|#|$)/i.test(href || "")) {
-      addUrl(href);
+      addCandidate(href, "link");
     }
   }
 
   return {
     pageTitle: document.title || "page-video",
-    videoElementCount: document.querySelectorAll("video").length,
-    urls
+    videoElementCount: videos.length,
+    candidates,
+    urls: candidates.map((candidate) => candidate.url)
   };
 }
 
-async function readBlobVideoFromPage(blobUrl, maxBytes) {
-  const response = await fetch(blobUrl);
+async function readVideoFromPage(url, maxBytes) {
+  const response = await fetch(url, { credentials: "include" });
   if (!response.ok) {
-    throw new Error(`Could not read blob video: ${response.status}`);
+    throw new Error(`Could not read page video: ${response.status}`);
   }
 
   const blob = await response.blob();
@@ -154,6 +164,29 @@ async function readBlobVideoFromPage(blobUrl, maxBytes) {
     mimeType: blob.type || "video/mp4",
     size: blob.size
   };
+}
+
+function selectBestPageVideoCandidate(candidates) {
+  const supported = (candidates || []).filter((candidate) => {
+    const url = candidate.url || "";
+    return url.startsWith("blob:") || /^https?:\/\//i.test(url);
+  });
+
+  const priority = [
+    "video-current",
+    "video-src",
+    "video-source",
+    "metadata",
+    "link"
+  ];
+
+  supported.sort((a, b) => {
+    const typeDiff = priority.indexOf(a.sourceType) - priority.indexOf(b.sourceType);
+    if (typeDiff !== 0) return typeDiff;
+    return (a.videoIndex ?? 999) - (b.videoIndex ?? 999);
+  });
+
+  return supported[0] || null;
 }
 
 async function getActiveTab() {
@@ -211,30 +244,20 @@ async function analyzePageVideo() {
   try {
     const tab = await getActiveTab();
     const pageInfo = await getPageVideoInfo(tab.id);
-    const urls = pageInfo.urls || [];
+    const candidate = selectBestPageVideoCandidate(pageInfo.candidates || []);
 
-    if (!urls.length) {
+    if (!candidate) {
       throw new Error(pageInfo.videoElementCount > 0
         ? "Video found, but the page does not expose a readable source URL."
         : "No video source found on this page.");
     }
 
-    const blobUrl = urls.find((url) => url.startsWith("blob:"));
-    const directUrl = urls.find((url) => /^https?:\/\//i.test(url));
-
-    if (directUrl) {
-      setStatus("Downloading page video through Chrome.");
-      const blob = await fetchPageVideoAsBlob(directUrl);
-      await uploadBlobForPrediction(blob, filenameFromUrl(directUrl));
-      return;
-    }
-
-    if (blobUrl) {
-      setStatus("Reading blob video from the current tab.");
+    if (candidate.url.startsWith("blob:")) {
+      setStatus("Reading the active page video.");
       const [injection] = await chrome.scripting.executeScript({
         target: { tabId: tab.id },
-        func: readBlobVideoFromPage,
-        args: [blobUrl, MAX_PAGE_VIDEO_BYTES]
+        func: readVideoFromPage,
+        args: [candidate.url, MAX_PAGE_VIDEO_BYTES]
       });
       const blobData = injection?.result;
       if (!blobData?.bytes?.length) {
@@ -244,11 +267,32 @@ async function analyzePageVideo() {
       const bytes = new Uint8Array(blobData.bytes);
       const blob = new Blob([bytes], { type: blobData.mimeType });
       const ext = extensionFromMime(blobData.mimeType);
-      await uploadBlobForPrediction(blob, `${pageInfo.pageTitle}.${ext}`);
+      await uploadBlobForPrediction(blob, `${sanitizeFilename(pageInfo.pageTitle)}.${ext}`);
       return;
     }
 
-    throw new Error("No supported video URL found on this page.");
+    setStatus("Downloading the active page video.");
+    let blob;
+    try {
+      blob = await fetchPageVideoAsBlob(candidate.url);
+    } catch (_popupFetchError) {
+      const [injection] = await chrome.scripting.executeScript({
+        target: { tabId: tab.id },
+        func: readVideoFromPage,
+        args: [candidate.url, MAX_PAGE_VIDEO_BYTES]
+      });
+      const blobData = injection?.result;
+      if (blobData?.bytes?.length) {
+        const bytes = new Uint8Array(blobData.bytes);
+        blob = new Blob([bytes], { type: blobData.mimeType });
+      }
+    }
+
+    if (!blob) {
+      throw new Error("Could not download the selected page video.");
+    }
+
+    await uploadBlobForPrediction(blob, filenameFromUrl(candidate.url));
   } catch (error) {
     clearResult();
     setStatus(error.message);

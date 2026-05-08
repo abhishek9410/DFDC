@@ -201,6 +201,53 @@ Stop-Process -Id <PID>
 
 *Note: The model (`inceptionNet_model.h5`) is located in `Deploy/models/`. Model loading may take several seconds on startup, and predictions can take about a minute for a 10-second 30fps video.*
 
+## Accuracy Upgrade: Train the EfficientNetV2 Model
+
+The deployed app now supports a stronger model path:
+
+```text
+Deploy/models/efficientnetv2_frame_model.keras
+```
+
+If this file exists, Flask uses it automatically. If it does not exist, Flask falls back to the original `InceptionV3 + GRU` model.
+
+### 1. Extract the DFDC sample dataset
+
+From the repository root:
+
+```powershell
+.\.venv\Scripts\python.exe "Model Training\train_frame_model.py" --extract-zip "Dataset\deepfake-detection-challenge\dfdc-train-sample-dataset.zip" --dataset-dir "Dataset\deepfake-detection-challenge" --max-videos 20 --epochs 1 --fine-tune-epochs 0
+```
+
+The command above is a smoke test. It verifies that extraction and training work, but it is not enough for high accuracy.
+
+### 2. Train a real model
+
+Use more videos and more epochs:
+
+```powershell
+.\.venv\Scripts\python.exe "Model Training\train_frame_model.py" --dataset-dir "Dataset\deepfake-detection-challenge" --frames-per-video 24 --epochs 8 --fine-tune-epochs 4 --batch-size 16
+```
+
+For better real-world accuracy, train on more than the small DFDC sample. Mix datasets such as DFDC, FaceForensics++, Celeb-DF v2, DeeperForensics, and WildDeepfake, and keep one dataset completely unseen for final testing.
+
+### 3. Restart Flask
+
+After training finishes, restart the server:
+
+```powershell
+Stop-Process -Id <SERVER_PID>
+Start-Process -FilePath ".\.venv\Scripts\python.exe" -ArgumentList "run_server.py" -WorkingDirectory ".\Deploy" -WindowStyle Hidden
+```
+
+Then check:
+
+```powershell
+Invoke-WebRequest -UseBasicParsing http://127.0.0.1:5000/api/health
+```
+
+The health response should show `EfficientNetV2 frame ensemble` as the active model.
+
 <h3 align="left">Languages and Tools:</h3>
 <p align="left"> <a href="https://www.w3schools.com/css/" target="_blank" rel="noreferrer"> <img src="https://raw.githubusercontent.com/devicons/devicon/master/icons/css3/css3-original-wordmark.svg" alt="css3" width="40" height="40"/> </a> <a href="https://www.w3.org/html/" target="_blank" rel="noreferrer"> <img src="https://raw.githubusercontent.com/devicons/devicon/master/icons/html5/html5-original-wordmark.svg" alt="html5" width="40" height="40"/> </a> <a href="https://opencv.org/" target="_blank" rel="noreferrer"> <img src="https://www.vectorlogo.zone/logos/opencv/opencv-icon.svg" alt="opencv" width="40" height="40"/> </a> <a href="https://pandas.pydata.org/" target="_blank" rel="noreferrer"> <img src="https://raw.githubusercontent.com/devicons/devicon/2ae2a900d2f041da66e950e4d48052658d850630/icons/pandas/pandas-original.svg" alt="pandas" width="40" height="40"/> </a> <a href="https://www.python.org" target="_blank" rel="noreferrer"> <img src="https://raw.githubusercontent.com/devicons/devicon/master/icons/python/python-original.svg" alt="python" width="40" height="40"/> </a> <a href="https://scikit-learn.org/" target="_blank" rel="noreferrer"> <img src="https://upload.wikimedia.org/wikipedia/commons/0/05/Scikit_learn_logo_small.svg" alt="scikit_learn" width="40" height="40"/> </a> <a href="https://seaborn.pydata.org/" target="_blank" rel="noreferrer"> <img src="https://seaborn.pydata.org/_images/logo-mark-lightbg.svg" alt="seaborn" width="40" height="40"/> </a> <a href="https://www.tensorflow.org" target="_blank" rel="noreferrer"> <img src="https://www.vectorlogo.zone/logos/tensorflow/tensorflow-icon.svg" alt="tensorflow" width="40" height="40"/> </a> </p>
 
@@ -218,6 +265,5 @@ FAKE. We Experimented with EfficientNet and inception net for the feature extrac
 GRU is used to make the classification. We have obtained a maximum Test Accuracy of ~85% 
 using this approach. Our model has high precision for FAKE videos which is obtained by giving 
 more FAKE videos during the training of the Model.
-
 
 

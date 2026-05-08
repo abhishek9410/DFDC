@@ -15,6 +15,17 @@ chrome.contextMenus.onClicked.addListener((info, tab) => {
   analyzeContextVideo(info, tab);
 });
 
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type !== "ANALYZE_VIDEO_SOURCE") {
+    return false;
+  }
+
+  analyzeInlineVideo(message, sender)
+    .then((result) => sendResponse({ ok: true, result }))
+    .catch((error) => sendResponse({ ok: false, error: error.message || "Could not analyze this video." }));
+  return true;
+});
+
 async function analyzeContextVideo(info, tab) {
   try {
     await setRunningState(tab.id);
@@ -46,9 +57,49 @@ async function analyzeContextVideo(info, tab) {
   }
 }
 
+async function analyzeInlineVideo(message, sender) {
+  const tabId = sender.tab?.id;
+  if (!tabId) {
+    throw new Error("No active tab was available for this video.");
+  }
+
+  const sources = [message.source].concat(message.sources || []).filter(Boolean);
+  const source = sources.find(isSupportedSource);
+  if (!source) {
+    throw new Error("This video does not expose a readable source URL.");
+  }
+
+  await setRunningState(tabId);
+  try {
+    const blob = await getVideoBlob(source, tabId);
+    const filename = filenameFromSource(source, message.pageTitle || "page-video", blob.type);
+    const result = await uploadForPrediction(blob, filename);
+    await setResultBadge(tabId, result);
+    return result;
+  } catch (error) {
+    await chrome.action.setBadgeText({ tabId, text: "ERR" });
+    await chrome.action.setBadgeBackgroundColor({ tabId, color: "#71717a" });
+    throw error;
+  }
+}
+
 async function setRunningState(tabId) {
   await chrome.action.setBadgeText({ tabId, text: "..." });
   await chrome.action.setBadgeBackgroundColor({ tabId, color: "#1f6feb" });
+}
+
+async function setResultBadge(tabId, result) {
+  if (result.status === "unsupported") {
+    await chrome.action.setBadgeText({ tabId, text: "INFO" });
+    await chrome.action.setBadgeBackgroundColor({ tabId, color: "#854d0e" });
+    return;
+  }
+
+  await chrome.action.setBadgeText({ tabId, text: result.label === "FAKE" ? "FAKE" : "REAL" });
+  await chrome.action.setBadgeBackgroundColor({
+    tabId,
+    color: result.label === "FAKE" ? "#b42318" : "#087443"
+  });
 }
 
 async function getContextVideoSource(info, tabId) {
